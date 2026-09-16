@@ -1,0 +1,27 @@
+name: Fuel Price Check
+
+on:
+  schedule:
+    - cron: '30 10 * * *'   # 10:30 UTC = 17:30 UTC+7 (รอบหลัก)
+    - cron: '0 15 * * *'    # 15:00 UTC = 22:00 UTC+7 (รอบสำรองจับข่าวล่าช้า)
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: 'pip'}
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: {name: fuel-db, path: .}
+        continue-on-error: true
+      - run: python fuel_check.py
+        env:
+          EASYSEND_API_KEY: ${{ secrets.EASYSEND_API_KEY }}
+          ALERT_PHONE: ${{ secrets.ALERT_PHONE }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: fuel-db, path: fuel.db, retention-days: 30}
