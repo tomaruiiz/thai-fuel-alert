@@ -11,17 +11,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.11', cache: 'pip'}
-      - run: pip install -r requirements.txt
-      - uses: actions/download-artifact@v4
-        with: {name: fuel-db, path: .}
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download previous DB (if exists)
+        uses: actions/download-artifact@v4
         continue-on-error: true
-      - run: python fuel_check.py
+        with:
+          name: fuel-db
+          path: .
+
+      - name: Run fuel price check
         env:
           EASYSEND_API_KEY: ${{ secrets.EASYSEND_API_KEY }}
           ALERT_PHONE: ${{ secrets.ALERT_PHONE }}
-      - uses: actions/upload-artifact@v4
+        run: python fuel_check.py
+
+      - name: Upload updated DB
         if: always()
-        with: {name: fuel-db, path: fuel.db, retention-days: 30}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuel-db
+          path: fuel.db
+          retention-days: 30
