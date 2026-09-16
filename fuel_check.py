@@ -2,6 +2,7 @@
 """
 Thailand Fuel Price Check - All fuels monitored, E20/95 highlighted
 Runs 2x/day: 17:30 & 22:00 UTC+7 on GitHub Actions
+Uses thai-oil-api (primary) + Bangchak (fallback)
 """
 
 import os
@@ -11,7 +12,10 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 TH_TZ = timezone(timedelta(hours=7))
-API_URL = "https://api.bangchak.co.th/api/v1/oil-price/today"
+# Primary: thai-oil-api (multi-brand, reliable)
+PRIMARY_API = "https://api.chnwt.dev/thai-oil-api/latest"
+# Fallback: Bangchak official
+FALLBACK_API = "https://oil-price.bangchak.co.th/api/v1/oil-price/today"
 DB = Path("fuel.db")
 
 TARGET_FUELS = {
@@ -19,17 +23,31 @@ TARGET_FUELS = {
     "GASOHOL_95":  ("แก๊สโซฮอล 95",  "Gasohol 95"),
 }
 
-FUEL_PATTERNS = {
-    "GASOHOL_E85":  ("E85", "Gasohol E85"),
-    "GASOHOL_E20":  ("E20", "Gasohol E20"),
-    "GASOHOL_91":   ("91", "Gasohol 91"),
-    "GASOHOL_95":   ("95", "Gasohol 95"),
-    "GASOLINE_95":  ("95", "Gasoline 95"),
-    "DIESEL_B20":   ("B20", "Diesel B20"),
-    "DIESEL":       ("DSL", "Diesel"),
-    "HI_DIESEL":    ("HiD", "Hi Diesel"),
-    "HI_PREMIUM_D": ("HiP", "Hi Premium Diesel"),
-    "HI_PREMIUM_G": ("HiP", "Hi Premium Gasohol"),
+# thai-oil-api response structure mapping
+THAI_OIL_MAP = {
+    "gasohol_e20":  "GASOHOL_E20",
+    "gasohol_95":   "GASOHOL_95",
+    "gasohol_91":   "GASOHOL_91",
+    "gasohol_e85":  "GASOHOL_E85",
+    "diesel":       "DIESEL",
+    "diesel_b7":    "DIESEL_B7",
+    "diesel_b20":   "DIESEL_B20",
+    "premium_diesel": "HI_DIESEL",
+    "premium_gasohol_95": "HI_PREMIUM_G",
+    "gasoline_95":  "GASOLINE_95",
+}
+
+FUEL_DISPLAY = {
+    "GASOHOL_E20":  ("แก๊สโซฮอล E20",  "Gasohol E20"),
+    "GASOHOL_95":   ("แก๊สโซฮอล 95",   "Gasohol 95"),
+    "GASOHOL_91":   ("แก๊สโซฮอล 91",   "Gasohol 91"),
+    "GASOHOL_E85":  ("แก๊สโซฮอล E85",  "Gasohol E85"),
+    "DIESEL":       ("ดีเซล",         "Diesel"),
+    "DIESEL_B7":    ("ดีเซล B7",      "Diesel B7"),
+    "DIESEL_B20":   ("ดีเซล B20",     "Diesel B20"),
+    "HI_DIESEL":    ("ดีเซลพรีเมียม", "Premium Diesel"),
+    "HI_PREMIUM_G": ("แก๊สโซฮอล 95 พรีเมียม", "Premium Gasohol 95"),
+    "GASOLINE_95":  ("เบนซิน 95",      "Gasoline 95"),
 }
 
 SMS_API = "https://restapi.easysendsms.app/v1/rest/sms/send"
@@ -53,23 +71,78 @@ def save_now(prices: dict, eff_date: str):
             c.execute("INSERT OR REPLACE INTO prices VALUES (?, ?, ?, ?)",
                       (f, p, now, eff_date))
 
-def fetch_all() -> dict | None:
+def fetch_thai_oil_api() -> dict | None:
+    """Fetch from thai-oil-api (primary)"""
     try:
-        r = requests.get(API_URL, timeout=10)
+        r = requests.get(PRIMARY_API, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("status") != "success":
+            return None
+        stations = data.get("response", {}).get("stations", {})
+        # Aggregate: take first available price for each fuel type across brands
+        out = {}
+        for brand, fuels in stations.items():
+            for fuel_key, info in fuels.items():
+                our_key = THAI_OIL_MAP.get(fuel_key)
+                if our_key and our_key not in out:
+                    try:
+                        out[our_key] = float(info.get("price", 0))
+                    except (ValueError, TypeError):
+                        pass
+        return out if out else None
+    except Exception as e:
+        print(f"[WARN] thai-oil-api failed: {e}")
+        return None
+
+def fetch_bangchak() -> dict | None:
+    """Fetch from Bangchak (fallback)"""
+    try:
+        r = requests.get(FALLBACK_API, timeout=10)
         r.raise_for_status()
         data = r.json().get("data", {}).get("today", [])
         out = {}
         for item in data:
             name = item.get("name", "").upper()
             price = float(item.get("price", 0))
-            for key, (pat, _) in FUEL_PATTERNS.items():
-                if pat in name and key not in out:
-                    out[key] = price
-                    break
+            # Map Bangchak names
+            if "E20" in name and "GASOHOL" in name:
+                out["GASOHOL_E20"] = price
+            elif "95" in name and "GASOHOL" in name and "E20" not in name and "E85" not in name:
+                out["GASOHOL_95"] = price
+            elif "E85" in name and "GASOHOL" in name:
+                out["GASOHOL_E85"] = price
+            elif "91" in name and "GASOHOL" in name:
+                out["GASOHOL_91"] = price
+            elif "DIESEL" in name and "B20" in name:
+                out["DIESEL_B20"] = price
+            elif "DIESEL" in name and "HI" not in name and "PREMIUM" not in name:
+                out["DIESEL"] = price
+            elif "HI" in name and "DIESEL" in name:
+                out["HI_DIESEL"] = price
+            elif "PREMIUM" in name and "DIESEL" in name:
+                out["HI_DIESEL"] = price
+            elif "PREMIUM" in name and "GASOHOL" in name:
+                out["HI_PREMIUM_G"] = price
+            elif "95" in name and "GASOHOL" not in name and "BENZIN" in name:
+                out["GASOLINE_95"] = price
         return out if out else None
     except Exception as e:
-        print(f"[ERR] fetch: {e}")
+        print(f"[WARN] Bangchak API failed: {e}")
         return None
+
+def fetch_all() -> dict | None:
+    """Try primary, then fallback"""
+    prices = fetch_thai_oil_api()
+    if prices:
+        print(f"[INFO] Got prices from thai-oil-api: {len(prices)} fuels")
+        return prices
+    print("[INFO] Falling back to Bangchak API...")
+    prices = fetch_bangchak()
+    if prices:
+        print(f"[INFO] Got prices from Bangchak: {len(prices)} fuels")
+        return prices
+    return None
 
 def send(msg: str, key: str, to: str) -> bool:
     try:
@@ -83,18 +156,18 @@ def send(msg: str, key: str, to: str) -> bool:
 def build_detailed_msg(target_changes: dict, other_changes: dict, eff: str) -> str:
     lines = [f"⛽ แจ้งเตือนปรับราคาน้ำมัน (มีผล {eff})"]
     for fuel, (old, new) in target_changes.items():
-        th, en = TARGET_FUELS[fuel]
+        th, en = FUEL_DISPLAY.get(fuel, (fuel, fuel))
         diff = new - old
         arrow = "🔺" if diff > 0 else "🔻"
         lines.append(f"{arrow} {th} ({en}): {old:.2f} → {new:.2f} บาท ({diff:+.2f})")
     if other_changes:
         lines.append("\n📋 น้ำมันอื่นที่เปลี่ยน:")
         for fuel, (old, new) in other_changes.items():
-            _, en = FUEL_PATTERNS.get(fuel, (fuel, fuel))
+            th, en = FUEL_DISPLAY.get(fuel, (fuel, fuel))
             diff = new - old
             arrow = "🔺" if diff > 0 else "🔻"
-            lines.append(f"  {arrow} {en}: {old:.2f} → {new:.2f} ({diff:+.2f})")
-    lines += [f"\n📊 Bangchak Corporation",
+            lines.append(f"  {arrow} {th} ({en}): {old:.2f} → {new:.2f} ({diff:+.2f})")
+    lines += [f"\n📊 แหล่งข้อมูล: thai-oil-api / Bangchak",
               f"🕐 {datetime.now(TH_TZ).strftime('%d/%m/%Y %H:%M')}"]
     return "\n".join(lines)
 
@@ -103,11 +176,11 @@ def build_notice_msg(other_changes: dict, eff: str) -> str:
     lines.append("✅ แก๊สโซฮอล E20 และ 95 **คงราคาเดิม**")
     lines.append("\n📋 น้ำมันที่เปลี่ยน:")
     for fuel, (old, new) in other_changes.items():
-        _, en = FUEL_PATTERNS.get(fuel, (fuel, fuel))
+        th, en = FUEL_DISPLAY.get(fuel, (fuel, fuel))
         diff = new - old
         arrow = "🔺" if diff > 0 else "🔻"
-        lines.append(f"  {arrow} {en}: {old:.2f} → {new:.2f} ({diff:+.2f})")
-    lines += [f"\n📊 Bangchak Corporation",
+        lines.append(f"  {arrow} {th} ({en}): {old:.2f} → {new:.2f} ({diff:+.2f})")
+    lines += [f"\n📊 แหล่งข้อมูล: thai-oil-api / Bangchak",
               f"🕐 {datetime.now(TH_TZ).strftime('%d/%m/%Y %H:%M')}"]
     return "\n".join(lines)
 
@@ -120,7 +193,7 @@ def main() -> int:
     last = load_last()
     now_prices = fetch_all()
     if not now_prices:
-        print("[ERR] no prices"); return 1
+        print("[ERR] no prices from any source"); return 1
 
     all_changes = {}
     for fuel, new_price in now_prices.items():
