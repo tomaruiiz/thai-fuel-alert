@@ -3,7 +3,7 @@ name: Fuel Price Check
 on:
   schedule:
     - cron: '30 10 * * *'   # 10:30 UTC = 17:30 UTC+7 (รอบหลัก)
-    - cron: '0 15 * * *'    # 15:00 UTC = 22:00 UTC+7 (รอบสำรองจับข่าวล่าช้า)
+    - cron: '0 15 * * *'    # 15:00 UTC = 22:00 UTC+7 (รอบสำรอง)
   workflow_dispatch:
 
 jobs:
@@ -20,23 +20,27 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install dependencies
+      - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Download previous DB (if exists)
+      # ─── Download previous DB (skip if not exists) ───
+      - name: Download previous DB
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
           name: fuel-db
           path: .
+        # เราจะลองดาวน์โหลด แต่หากไม่มีก็ข้ามไปได้
 
+      # ─── Run the checker ───
       - name: Run fuel price check
         env:
           EASYSEND_API_KEY: ${{ secrets.EASYSEND_API_KEY }}
           ALERT_PHONE: ${{ secrets.ALERT_PHONE }}
         run: python fuel_check.py
 
-      - name: Upload updated DB
+      # ─── Upload updated DB ───
+      - name: Upload DB artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
