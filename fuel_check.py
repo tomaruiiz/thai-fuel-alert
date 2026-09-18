@@ -201,9 +201,9 @@ def main() -> int:
         if old is not None and abs(old - new_price) > 0.001:
             all_changes[fuel] = (old, new_price)
 
-    if not all_changes:
-        print("[OK] no price changes anywhere")
-        return 0
+  #  if not all_changes:
+  #      print("[OK] no price changes anywhere")
+  #      return 0
 
     target_changes = {f: all_changes[f] for f in TARGET_FUELS if f in all_changes}
     other_changes = {f: all_changes[f] for f in all_changes if f not in TARGET_FUELS}
