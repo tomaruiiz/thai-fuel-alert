@@ -12,9 +12,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 TH_TZ = timezone(timedelta(hours=7))
-# Primary: thai-oil-api (multi-brand, reliable)
 PRIMARY_API = "https://api.chnwt.dev/thai-oil-api/latest"
-# Fallback: Bangchak official
 FALLBACK_API = "https://oil-price.bangchak.co.th/api/v1/oil-price/today"
 DB = Path("fuel.db")
 
@@ -23,7 +21,6 @@ TARGET_FUELS = {
     "GASOHOL_95":  ("แก๊สโซฮอล 95",  "Gasohol 95"),
 }
 
-# thai-oil-api response structure mapping
 THAI_OIL_MAP = {
     "gasohol_e20":  "GASOHOL_E20",
     "gasohol_95":   "GASOHOL_95",
@@ -50,8 +47,9 @@ FUEL_DISPLAY = {
     "GASOLINE_95":  ("เบนซิน 95",      "Gasoline 95"),
 }
 
+# EasySendSMS - ต้องใช้ sender ID ที่ลงทะเบียนไว้ใน dashboard
 SMS_API = "https://restapi.easysendsms.app/v1/rest/sms/send"
-SENDER = "FuelAlert"
+SENDER = "FuelAlert"  # ต้องตรงกับที่ตั้งใน EasySendSMS Dashboard
 
 def init_db():
     with sqlite3.connect(DB) as c:
@@ -72,7 +70,6 @@ def save_now(prices: dict, eff_date: str):
                       (f, p, now, eff_date))
 
 def fetch_thai_oil_api() -> dict | None:
-    """Fetch from thai-oil-api (primary)"""
     try:
         r = requests.get(PRIMARY_API, timeout=10)
         r.raise_for_status()
@@ -80,7 +77,6 @@ def fetch_thai_oil_api() -> dict | None:
         if data.get("status") != "success":
             return None
         stations = data.get("response", {}).get("stations", {})
-        # Aggregate: take first available price for each fuel type across brands
         out = {}
         for brand, fuels in stations.items():
             for fuel_key, info in fuels.items():
@@ -96,7 +92,6 @@ def fetch_thai_oil_api() -> dict | None:
         return None
 
 def fetch_bangchak() -> dict | None:
-    """Fetch from Bangchak (fallback)"""
     try:
         r = requests.get(FALLBACK_API, timeout=10)
         r.raise_for_status()
@@ -105,7 +100,6 @@ def fetch_bangchak() -> dict | None:
         for item in data:
             name = item.get("name", "").upper()
             price = float(item.get("price", 0))
-            # Map Bangchak names
             if "E20" in name and "GASOHOL" in name:
                 out["GASOHOL_E20"] = price
             elif "95" in name and "GASOHOL" in name and "E20" not in name and "E85" not in name:
@@ -132,7 +126,6 @@ def fetch_bangchak() -> dict | None:
         return None
 
 def fetch_all() -> dict | None:
-    """Try primary, then fallback"""
     prices = fetch_thai_oil_api()
     if prices:
         print(f"[INFO] Got prices from thai-oil-api: {len(prices)} fuels")
@@ -144,10 +137,27 @@ def fetch_all() -> dict | None:
         return prices
     return None
 
-def send(msg: str, key: str, to: str) -> bool:
+def send_sms(msg: str, key: str, to: str) -> bool:
+    """
+    EasySendSMS API format:
+    - Sender ID ต้องลงทะเบียนไว้ใน Dashboard แล้ว
+    - Free tier อาจจำกัด template - ต้องใช้ข้อความที่ตรงกับที่ลงทะเบียน
+    """
     try:
-        r = requests.post(SMS_API, headers={"apikey": key, "Content-Type": "application/json"},
-                          json={"from": SENDER, "to": to, "text": msg, "type": "0"}, timeout=15)
+        # ลอง format ที่ EasySendSMS รองรับ
+        payload = {
+            "from": SENDER,
+            "to": to,
+            "text": msg,
+            "type": "0"  # 0 = normal, 1 = flash, 2 = unicode
+        }
+        headers = {
+            "apikey": key,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        r = requests.post(SMS_API, headers=headers, json=payload, timeout=15)
+        print(f"[SMS] Status: {r.status_code}, Response: {r.text[:200]}")
         return r.status_code == 200
     except Exception as e:
         print(f"[ERR] sms: {e}")
@@ -159,27 +169,27 @@ def build_detailed_msg(target_changes: dict, other_changes: dict, eff: str) -> s
         th, en = FUEL_DISPLAY.get(fuel, (fuel, fuel))
         diff = new - old
         arrow = "🔺" if diff > 0 else "🔻"
-        lines.append(f"{arrow} {th} ({en}): {old:.2f} → {new:.2f} บาท ({diff:+.2f})")
+        lines.append(f"{arrow} {th} ({en}): {old:.2f} -> {new:.2f} บาท ({diff:+.2f})")
     if other_changes:
         lines.append("\n📋 น้ำมันอื่นที่เปลี่ยน:")
         for fuel, (old, new) in other_changes.items():
             th, en = FUEL_DISPLAY.get(fuel, (fuel, fuel))
             diff = new - old
             arrow = "🔺" if diff > 0 else "🔻"
-            lines.append(f"  {arrow} {th} ({en}): {old:.2f} → {new:.2f} ({diff:+.2f})")
+            lines.append(f"  {arrow} {th} ({en}): {old:.2f} -> {new:.2f} ({diff:+.2f})")
     lines += [f"\n📊 แหล่งข้อมูล: thai-oil-api / Bangchak",
               f"🕐 {datetime.now(TH_TZ).strftime('%d/%m/%Y %H:%M')}"]
     return "\n".join(lines)
 
 def build_notice_msg(other_changes: dict, eff: str) -> str:
     lines = [f"ℹ️ มีการประกาศปรับราคาน้ำมัน (มีผล {eff})"]
-    lines.append("✅ แก๊สโซฮอล E20 และ 95 **คงราคาเดิม**")
+    lines.append("✅ แก๊สโซฮอล E20 และ 95 คงราคาเดิม")
     lines.append("\n📋 น้ำมันที่เปลี่ยน:")
     for fuel, (old, new) in other_changes.items():
         th, en = FUEL_DISPLAY.get(fuel, (fuel, fuel))
         diff = new - old
         arrow = "🔺" if diff > 0 else "🔻"
-        lines.append(f"  {arrow} {th} ({en}): {old:.2f} → {new:.2f} ({diff:+.2f})")
+        lines.append(f"  {arrow} {th} ({en}): {old:.2f} -> {new:.2f} ({diff:+.2f})")
     lines += [f"\n📊 แหล่งข้อมูล: thai-oil-api / Bangchak",
               f"🕐 {datetime.now(TH_TZ).strftime('%d/%m/%Y %H:%M')}"]
     return "\n".join(lines)
@@ -201,6 +211,7 @@ def main() -> int:
         if old is not None and abs(old - new_price) > 0.001:
             all_changes[fuel] = (old, new_price)
 
+    # สำคัญ: ถ้าไม่มีการเปลี่ยนแปลงเลย -> ไม่ส่ง SMS, ออกไปเลย
     if not all_changes:
         print("[OK] no price changes anywhere")
         return 0
@@ -217,7 +228,7 @@ def main() -> int:
         msg = build_notice_msg(other_changes, eff)
         print(f"[NOTICE] Other fuels changed\n{msg}")
 
-    if send(msg, key, phone):
+    if send_sms(msg, key, phone):
         save_now(now_prices, eff)
         print("[OK] sent & saved")
         return 0
