@@ -47,9 +47,8 @@ FUEL_DISPLAY = {
     "GASOLINE_95":  ("เบนซิน 95",      "Gasoline 95"),
 }
 
-# EasySendSMS - ต้องใช้ sender ID ที่ลงทะเบียนไว้ใน dashboard
 SMS_API = "https://restapi.easysendsms.app/v1/rest/sms/send"
-SENDER = "FuelAlert"  # ต้องตรงกับที่ตั้งใน EasySendSMS Dashboard
+SENDER = "FuelAlert"
 
 def init_db():
     with sqlite3.connect(DB) as c:
@@ -138,18 +137,12 @@ def fetch_all() -> dict | None:
     return None
 
 def send_sms(msg: str, key: str, to: str) -> bool:
-    """
-    EasySendSMS API format:
-    - Sender ID ต้องลงทะเบียนไว้ใน Dashboard แล้ว
-    - Free tier อาจจำกัด template - ต้องใช้ข้อความที่ตรงกับที่ลงทะเบียน
-    """
     try:
-        # ลอง format ที่ EasySendSMS รองรับ
         payload = {
             "from": SENDER,
             "to": to,
             "text": msg,
-            "type": "0"  # 0 = normal, 1 = flash, 2 = unicode
+            "type": "0"
         }
         headers = {
             "apikey": key,
