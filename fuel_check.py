@@ -204,6 +204,16 @@ def main() -> int:
         if old is not None and abs(old - new_price) > 0.001:
             all_changes[fuel] = (old, new_price)
 
+    # 🔧 FORCE TEST: บังคับให้มีการเปลี่ยนแปลงเพื่อทดสอบ SMS
+    if not all_changes and now_prices:
+        print("[TEST] Forcing price change for test SMS...")
+        # ใช้ราคาจาก API แล้วบังคับเปลี่ยนเล็กน้อย
+        for fuel in ["GASOHOL_E20", "GASOHOL_95"]:
+            if fuel in now_prices:
+                fake_old = now_prices[fuel] + 1.50  # สมมติราคาเก่าสูงกว่า 1.50 บาท
+                all_changes[fuel] = (fake_old, now_prices[fuel])
+                print(f"[TEST] {fuel}: fake old={fake_old:.2f}, new={now_prices[fuel]:.2f}")
+
     # สำคัญ: ถ้าไม่มีการเปลี่ยนแปลงเลย -> ไม่ส่ง SMS, ออกไปเลย
     if not all_changes:
         print("[OK] no price changes anywhere")
