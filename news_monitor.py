@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-Thailand Fuel Price News Monitor - Production
-Monitors Thai news RSS feeds + API fallback for fuel price adjustments
-Runs every 30 min on GitHub Actions
+Thailand Fuel Price News Monitor - Production + FORCE TEST
 """
 
 import os
@@ -37,26 +35,20 @@ RSS_FEEDS = [
     "https://www.eppo.go.th/rss.xml",
 ]
 
-# SPECIFIC keywords for Thai fuel price adjustment announcements
 NEWS_KEYWORDS = [
-    # Must-have: price adjustment terms
     r"ปรับราคาน้ำมัน", r"ประกาศราคาน้ำมัน", r"ราคาน้ำมัน.*(?:ลด|เพิ่ม|ขึ้น|ลง)",
     r"กองทุนน้ำมัน.*(?:ประกาศ|ปรับ)", r"ออillฟันด์.*(?:ประกาศ|ปรับ)", 
     r"Oil Fund.*(?:announc|adjust)", r"Fuel Fund.*(?:announc|adjust)",
-    # Specific fuel types with price context
     r"(?:แก๊สโซฮอล|Gasohol|ดีเซล|Diesel|เบนซิน|Gasoline).*(?:ลด|เพิ่ม|ขึ้น|ลง|ปรับ).*\d",
     r"(?:E20|E85|91|95|B20|B7).*(?:ลด|เพิ่ม|ขึ้น|ลง|ปรับ).*\d",
     r"(?:ลด|เพิ่ม|ขึ้น|ลง).*\d\.\d{2}.*(?:บาท|ลิตร)",
-    # Effective date patterns
     r"มีผล.*\d{1,2}/\d{1,2}/\d{2,4}", r"มีผล.*\d{1,2}\s*(?:ม\.ค\.|ก\.พ\.|มี\.ค\.|เม\.ย\.|พ\.ค\.|มิ\.ย\.|ก\.ค\.|ส\.ค\.|ก\.ย\.|ต\.ค\.|พ\.ย\.|ธ\.ค\.)",
     r"มีผลพรุ่งนี้", r"มีผลวันนี้", r"เวลา\s*\d{1,2}\s*โมงเช้า",
-    # Official sources
     r"PTT\s*OR.*(?:ประกาศ|ปรับ)", r"PTTOR.*(?:ประกาศ|ปรับ)", r"Bangchak.*(?:ประกาศ|ปรับ)",
 ]
 
 COMPILED_KEYWORDS = [re.compile(kw, re.IGNORECASE) for kw in NEWS_KEYWORDS]
 
-# Price patterns
 PRICE_PATTERNS = {
     "GASOHOL_E20": [
         re.compile(r"(?:E20|E\s*20|แก๊สโซฮอล\s*E\s*20|gasohol\s*e\s*20)[^\d]*(\d{1,2}\.\d{2})", re.IGNORECASE),
@@ -90,7 +82,6 @@ THAI_MONTHS = {
     "ต.ค.": 10, "ตุลาคม": 10, "พ.ย.": 11, "พฤศจิกายน": 11, "ธ.ค.": 12, "ธันวาคม": 12,
 }
 
-# API Fallback - check actual prices from thai-oil-api
 API_URL = "https://api.chnwt.dev/thai-oil-api/latest"
 
 def init_db():
@@ -147,9 +138,7 @@ def article_hash(title: str, link: str) -> str:
     return hashlib.sha256(f"{title}|{link}".encode()).hexdigest()[:16]
 
 def is_fuel_news(title: str, summary: str) -> bool:
-    """Strict filter for fuel price adjustment news"""
     text = f"{title} {summary}"
-    # Must match at least one specific keyword
     return any(p.search(text) for p in COMPILED_KEYWORDS)
 
 def fetch_article_content(url: str) -> str:
@@ -252,9 +241,9 @@ def parse_article(title: str, summary: str, link: str) -> dict | None:
     return {"effective_date": eff_date or (datetime.now(TH_TZ) + timedelta(days=1)).strftime("%Y-%m-%d"),
             "changes": results}
 
-# ─── API Fallback ───
+API_URL = "https://api.chnwt.dev/thai-oil-api/latest"
+
 def check_api_prices() -> dict | None:
-    """Check thai-oil-api for actual price changes"""
     try:
         r = requests.get(API_URL, timeout=10)
         r.raise_for_status()
@@ -303,7 +292,6 @@ def build_sms_message(parsed: dict) -> str:
     return "\n".join(lines)
 
 def build_api_sms_message(changes: dict) -> str:
-    """Build SMS from API price changes"""
     eff = (datetime.now(TH_TZ) + timedelta(days=1)).strftime("%d/%m/%Y")
     lines = [f"🚨 ราคาน้ำมันพรุ่งนี้ (จาก API)", f"มีผล {eff} เวลา 05:00 น.", ""]
     for fuel_key, (old, new) in changes.items():
@@ -314,114 +302,141 @@ def build_api_sms_message(changes: dict) -> str:
     lines.append(""), lines.append(f"🕐 {datetime.now(TH_TZ).strftime('%d/%m/%Y %H:%M')}")
     return "\n".join(lines)
 
+def force_test_sms(key: str, phone: str) -> bool:
+    """FORCE TEST: Send a test SMS with current timestamp"""
+    eff = (datetime.now(TH_TZ) + timedelta(days=1)).strftime("%d/%m/%Y")
+    now_str = datetime.now(TH_TZ).strftime("%d/%m/%Y %H:%M:%S")
+    lines = [
+        "🧪 TEST SMS - Fuel Alert System",
+        f"มีผล {eff} เวลา 05:00 น.",
+        "",
+        "⛽ Gasohol E20: 32.10 -0.95 บาท/L",
+        "⛽ Gasohol 95: 38.50 +0.75 บาท/L",
+        "",
+        f"🕐 {now_str}",
+        "---",
+        "This is a test message from GitHub Actions"
+    ]
+    msg = "\n".join(lines)
+    print(f"[FORCE TEST] Sending test SMS:\n{msg}")
+    return send_sms(msg, key, phone)
+
 def main() -> int:
     key, phone = os.getenv("EASYSEND_API_KEY"), os.getenv("ALERT_PHONE")
     if not key or not phone: print("[ERR] missing secrets"); return 1
 
     init_db()
-    total_new = 0
-    total_alerts = 0
-
-    # ─── 1. News Monitoring ───
-    for feed_url in RSS_FEEDS:
-        print(f"[INFO] Checking {feed_url}")
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:100]:
-                title = entry.get("title", "")
-                summary = entry.get("summary", entry.get("description", ""))
-                link = entry.get("link", "")
-                published = entry.get("published", entry.get("updated", ""))
-
-                if not is_fuel_news(title, summary):
-                    continue
-
-                a_hash = article_hash(title, link)
-                if is_processed(a_hash):
-                    continue
-
-                print(f"[NEWS] Found: {title[:100]}")
-                total_new += 1
-
-                parsed = parse_article(title, summary, link)
-                if not parsed:
-                    print("[WARN] Could not extract price info")
-                    mark_processed(a_hash, title, link, published)
-                    continue
-
-                any_new = False
-                for fuel_key, info in parsed["changes"].items():
-                    price, change, eff_date = info["price"], info["change"], parsed["effective_date"]
-                    if is_duplicate_price_change(fuel_key, price, change, eff_date):
-                        print(f"[SKIP] Duplicate: {fuel_key} {price} ({change:+.2f})")
-                        continue
-                    any_new = True
-                    save_price_info(fuel_key, price, change, eff_date, a_hash)
-
-                if any_new:
-                    msg = build_sms_message(parsed)
-                    print(f"[ALERT] Sending SMS:\n{msg}")
-                    if send_sms(msg, key, phone):
-                        total_alerts += 1
-                        print("[OK] SMS sent")
-                    else:
-                        print("[ERR] SMS failed")
-                        continue
-
-                mark_processed(a_hash, title, link, published)
-
-        except Exception as e:
-            print(f"[ERROR] Feed {feed_url}: {e}")
-
-    # ─── 2. API Fallback Check (always run) ───
-    print("[INFO] Checking API prices as fallback...")
-    api_prices = check_api_prices()
-    if api_prices:
-        api_changes = {}
-        for fuel_key in TARGET_FUELS:
-            new_price = api_prices.get(fuel_key)
-            old_price = get_last_api_price(fuel_key)
-            if new_price and old_price and abs(new_price - old_price) > 0.001:
-                api_changes[fuel_key] = (old_price, new_price)
-                print(f"[API] Price change: {fuel_key} {old_price:.2f} -> {new_price:.2f}")
-
-        if api_changes:
-            # Check if already alerted via news
-            already_alerted = False
-            for fuel_key, (old, new) in api_changes.items():
-                last = get_last_price_info(fuel_key)
-                if last and abs(last["price"] - new) < 0.01 and abs(last["change"] - (new-old)) < 0.01:
-                    already_alerted = True
-                    break
-            
-            if not already_alerted:
-                for fuel_key, (old, new) in api_changes.items():
-                    save_price_info(fuel_key, new, new-old, 
-                                   (datetime.now(TH_TZ) + timedelta(days=1)).strftime("%Y-%m-%d"),
-                                   "api_fallback")
-                    save_api_price(fuel_key, new)
-                
-                msg = build_api_sms_message(api_changes)
-                print(f"[API ALERT] Sending SMS:\n{msg}")
-                if send_sms(msg, key, phone):
-                    total_alerts += 1
-                    print("[OK] API SMS sent")
-                else:
-                    print("[ERR] API SMS failed")
-            else:
-                print("[SKIP] API changes already alerted via news")
-                for fuel_key, (old, new) in api_changes.items():
-                    save_api_price(fuel_key, new)
-        else:
-            print("[API] No price changes detected")
-            for fuel_key, price in api_prices.items():
-                if fuel_key in TARGET_FUELS:
-                    save_api_price(fuel_key, price)
+    
+    # ─── FORCE TEST MODE ───
+    # Uncomment the next 3 lines to force send a test SMS
+    print("[FORCE TEST MODE] Sending test SMS...")
+    if force_test_sms(key, phone):
+        print("[OK] Force test SMS sent")
     else:
-        print("[API] Could not fetch prices")
-
-    print(f"[DONE] News: {total_new} new articles, {total_alerts} alerts sent")
+        print("[ERR] Force test SMS failed")
     return 0
+    
+    # ─── NORMAL MODE (commented out during force test) ───
+    # total_new = 0
+    # total_alerts = 0
+    # 
+    # for feed_url in RSS_FEEDS:
+    #     print(f"[INFO] Checking {feed_url}")
+    #     try:
+    #         feed = feedparser.parse(feed_url)
+    #         for entry in feed.entries[:100]:
+    #             title = entry.get("title", "")
+    #             summary = entry.get("summary", entry.get("description", ""))
+    #             link = entry.get("link", "")
+    #             published = entry.get("published", entry.get("updated", ""))
+    # 
+    #             if not is_fuel_news(title, summary):
+    #                 continue
+    # 
+    #             a_hash = article_hash(title, link)
+    #             if is_processed(a_hash):
+    #                 continue
+    # 
+    #             print(f"[NEWS] Found: {title[:100]}")
+    #             total_new += 1
+    # 
+    #             parsed = parse_article(title, summary, link)
+    #             if not parsed:
+    #                 print("[WARN] Could not extract price info")
+    #                 mark_processed(a_hash, title, link, published)
+    #                 continue
+    # 
+    #             any_new = False
+    #             for fuel_key, info in parsed["changes"].items():
+    #                 price, change, eff_date = info["price"], info["change"], parsed["effective_date"]
+    #                 if is_duplicate_price_change(fuel_key, price, change, eff_date):
+    #                     print(f"[SKIP] Duplicate: {fuel_key} {price} ({change:+.2f})")
+    #                     continue
+    #                 any_new = True
+    #                 save_price_info(fuel_key, price, change, eff_date, a_hash)
+    # 
+    #             if any_new:
+    #                 msg = build_sms_message(parsed)
+    #                 print(f"[ALERT] Sending SMS:\n{msg}")
+    #                 if send_sms(msg, key, phone):
+    #                     total_alerts += 1
+    #                     print("[OK] SMS sent")
+    #                 else:
+    #                     print("[ERR] SMS failed")
+    #                     continue
+    # 
+    #             mark_processed(a_hash, title, link, published)
+    # 
+    #     except Exception as e:
+    #         print(f"[ERROR] Feed {feed_url}: {e}")
+    # 
+    # print("[INFO] Checking API prices as fallback...")
+    # api_prices = check_api_prices()
+    # if api_prices:
+    #     api_changes = {}
+    #     for fuel_key in TARGET_FUELS:
+    #         new_price = api_prices.get(fuel_key)
+    #         old_price = get_last_api_price(fuel_key)
+    #         if new_price and old_price and abs(new_price - old_price) > 0.001:
+    #             api_changes[fuel_key] = (old_price, new_price)
+    #             print(f"[API] Price change: {fuel_key} {old_price:.2f} -> {new_price:.2f}")
+    # 
+    #     if api_changes:
+    #         already_alerted = False
+    #         for fuel_key, (old, new) in api_changes.items():
+    #             last = get_last_price_info(fuel_key)
+    #             if last and abs(last["price"] - new) < 0.01 and abs(last["change"] - (new-old)) < 0.01:
+    #                 already_alerted = True
+    #                 break
+    #         
+    #         if not already_alerted:
+    #             for fuel_key, (old, new) in api_changes.items():
+    #                 save_price_info(fuel_key, new, new-old, 
+    #                                (datetime.now(TH_TZ) + timedelta(days=1)).strftime("%Y-%m-%d"),
+    #                                "api_fallback")
+    #                 save_api_price(fuel_key, new)
+    #             
+    #             msg = build_api_sms_message(api_changes)
+    #             print(f"[API ALERT] Sending SMS:\n{msg}")
+    #             if send_sms(msg, key, phone):
+    #                 total_alerts += 1
+    #                 print("[OK] API SMS sent")
+    #             else:
+    #                 print("[ERR] API SMS failed")
+    #         else:
+    #             print("[SKIP] API changes already alerted via news")
+    #             for fuel_key, (old, new) in api_changes.items():
+    #                 save_api_price(fuel_key, new)
+    #     else:
+    #         print("[API] No price changes detected")
+    #         for fuel_key, price in api_prices.items():
+    #             if fuel_key in TARGET_FUELS:
+    #                 save_api_price(fuel_key, price)
+    # else:
+    #     print("[API] Could not fetch prices")
+    # 
+    # print(f"[DONE] News: {total_new} new articles, {total_alerts} alerts sent")
+    # return 0
 
 if __name__ == "__main__":
     exit(main())
