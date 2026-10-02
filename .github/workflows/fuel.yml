@@ -1,15 +1,18 @@
-name: Fuel Price Check
+name: Thailand Fuel Price News Monitor
 
 on:
   schedule:
-    - cron: '30 10 * * *'   # 10:30 UTC = 17:30 UTC+7 (รอบหลัก)
-    - cron: '0 15 * * *'    # 15:00 UTC = 22:00 UTC+7 (รอบสำรอง)
+    - cron: '*/30 * * * *'   # ทุก 30 นาที (0, 30) = 48 runs/day
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  check:
+  monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,30 +23,26 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ─── Download previous DB (skip if not exists) ───
-      - name: Download previous DB
+      - name: Download previous DB (if exists)
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: fuel-db
+          name: fuel-news-db
           path: .
-        # เราจะลองดาวน์โหลด แต่หากไม่มีก็ข้ามไปได้
 
-      # ─── Run the checker ───
-      - name: Run fuel price check
+      - name: Run News Monitor
         env:
           EASYSEND_API_KEY: ${{ secrets.EASYSEND_API_KEY }}
           ALERT_PHONE: ${{ secrets.ALERT_PHONE }}
-        run: python fuel_check.py
+        run: python news_monitor.py
 
-      # ─── Upload updated DB ───
-      - name: Upload DB artifact
+      - name: Upload updated DB
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fuel-db
-          path: fuel.db
+          name: fuel-news-db
+          path: fuel_news.db
           retention-days: 30
